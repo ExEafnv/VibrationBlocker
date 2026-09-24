@@ -15,9 +15,12 @@
 
 ## 📋 系统要求
 
-Android:8.0 ~ 16（API 26+）
-框架：LSPosed 2.0+ 
-作用域：系统框架（system）
+| 项目 | 要求 |
+|---|---|
+| Android | 8.0 ~ 16（API 26+） |
+| Root | APatch / KernelSU / Magisk |
+| 框架 | LSPosed 2.0+ |
+| 作用域 | **系统框架**（`system`） |
 
 ## 🔧 安装
 
