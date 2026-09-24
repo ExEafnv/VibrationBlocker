@@ -89,9 +89,8 @@ cd VibrationBlocker
 ## 📄 许可
 本项目基于 GPL-3.0 许可开源。
 
-🙏 致谢
-LSPosed — 框架
+## 🙏 致谢
 
-libsu — Root 调用
-
-Material Components for Android — UI
+- [LSPosed](https://github.com/LSPosed/LSPosed) — 框架
+- [libsu](https://github.com/topjohnwu/libsu) — Root 调用
+- [Material Components for Android](https://github.com/material-components/material-components-android) — UI
