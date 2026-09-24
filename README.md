@@ -84,13 +84,14 @@ LSPosed：2.1.0
 git clone https://github.com/ExEafnv/VibrationBlocker.git
 cd VibrationBlocker
 ./gradlew assembleRelease
+```
 
-📄 许可
-GPL-3.0
+## 📄 许可
+本项目基于 GPL-3.0 许可开源。
 
 🙏 致谢
-https://github.com/LSPosed/LSPosed — 框架
+LSPosed — 框架
 
-https://github.com/topjohnwu/libsu — Root 调用
+libsu — Root 调用
 
-https://github.com/material-components/material-components-android Components — UI
+Material Components for Android — UI
