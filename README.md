@@ -65,11 +65,13 @@ Android:8.0 ~ 16（API 26+）
 
 **本项目仅在以下环境开发并测试：**
 
-设备：魅族 22
-ROM：Flyme 12.6.0.0A
-Android：16（API 36）
-Root 方案：APatch
-LSPosed：2.1.0
+| 项目 | 值 |
+|---|---|
+| 设备 | 魅族 22 |
+| ROM | Flyme 12.6.0.0A |
+| Android | 16（API 36） |
+| Root 方案 | APatch |
+| LSPosed | 2.1.0 |
 
 **其他 ROM 的可能差异：**
 
