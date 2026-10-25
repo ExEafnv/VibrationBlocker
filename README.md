@@ -44,6 +44,16 @@ Android:8.0 ~ 16（API 26+）
 
 > 不同 ROM 来电振动的发起方包名不同，如遇到来电不震动，可将 `电话`、`Dialer`、`Telecom` 相关项都加入白名单。
 
+📄 许可
+https://choosealicense.com/licenses/gpl-3.0/
+
+🙏 致谢
+https://github.com/LSPosed/LSPosed — 框架
+
+https://github.com/topjohnwu/libsu — Root 调用
+
+https://github.com/material-components/material-components-android Components — UI
+
 ## ❓ 常见问题
 
 **Q: 打字没振动了怎么办？**
@@ -84,13 +94,3 @@ LSPosed：2.1.0
 git clone https://github.com/ExEafnv/VibrationBlocker.git
 cd VibrationBlocker
 ./gradlew assembleRelease
-
-📄 许可
-GPL-3.0
-
-🙏 致谢
-https://github.com/LSPosed/LSPosed — 框架
-
-https://github.com/topjohnwu/libsu — Root 调用
-
-https://github.com/material-components/material-components-android Components — UI

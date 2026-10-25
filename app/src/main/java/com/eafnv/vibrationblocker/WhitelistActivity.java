@@ -1,5 +1,6 @@
 package com.eafnv.vibrationblocker;
 
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -43,6 +44,7 @@ public class WhitelistActivity extends AppCompatActivity {
     private View pbLoading;
     private TextView tvEmpty;
     private Adapter adapter;
+    private TextInputEditText etSearch; // 提取为全局变量，方便清空后刷新
 
     private final List<AppItem> allApps = new ArrayList<>();
     private final Set<String> selected = new HashSet<>();
@@ -51,6 +53,8 @@ public class WhitelistActivity extends AppCompatActivity {
     private final LruCache<String, Drawable> iconCache = new LruCache<>(300);
 
     private Drawable defaultIcon;
+
+    private int currentFilterMode = 0; // 0=全部, 1=用户, 2=系统
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,10 +71,13 @@ public class WhitelistActivity extends AppCompatActivity {
             }
         }
 
-        MaterialToolbar toolbar = findViewById(R.id.toolbar);
-        toolbar.setNavigationOnClickListener(v -> finish());
+        findViewById(R.id.btn_back).setOnClickListener(v -> finish());
 
-        TextInputEditText etSearch = findViewById(R.id.et_search);
+        // ★ 新增：进入震动记录页
+        findViewById(R.id.btn_vib_log).setOnClickListener(v ->
+                startActivity(new Intent(this, VibLogActivity.class)));
+
+        etSearch = findViewById(R.id.et_search);
         rv = findViewById(R.id.rv_apps);
         pbLoading = findViewById(R.id.pb_loading);
         tvEmpty = findViewById(R.id.tv_empty);
@@ -90,15 +97,51 @@ public class WhitelistActivity extends AppCompatActivity {
         findViewById(R.id.btn_save).setOnClickListener(v -> {
             prefs.edit().putString("whitelist", TextUtils.join(",", selected)).apply();
             ConfigWriter.write(prefs);
-            finish();
+            // 改为弹窗提示
+            android.widget.Toast.makeText(this, "已保存", android.widget.Toast.LENGTH_SHORT).show();
         });
 
         findViewById(R.id.btn_clear).setOnClickListener(v -> {
             selected.clear();
-            adapter.notifyDataSetChanged();
+            // ★ 清空后触发一次过滤，让列表恢复原始排序
+            adapter.filter(etSearch.getText() != null ? etSearch.getText().toString() : "");
+        });
+
+        // ★ 新增：系统 / 用户过滤 ChipGroup
+        com.google.android.material.chip.ChipGroup chipGroup = findViewById(R.id.chip_group_filter);
+        chipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            if (checkedIds.isEmpty()) return;
+            int checkedId = checkedIds.get(0);
+            if (checkedId == R.id.chip_user) {
+                currentFilterMode = 1;
+            } else if (checkedId == R.id.chip_system) {
+                currentFilterMode = 2;
+            } else {
+                currentFilterMode = 0;
+            }
+            // 重新触发搜索过滤
+            adapter.filter(etSearch.getText() != null ? etSearch.getText().toString() : "");
         });
 
         loadAppsAsync();
+    }
+
+    // ★ 新增 onResume，确保从记录页返回时，白名单列表状态同步刷新
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 重新读取配置，因为可能在 VibLogActivity 中加了白名单
+        selected.clear();
+        String s = prefs.getString("whitelist", "");
+        if (!s.isEmpty()) {
+            for (String p : s.split(",")) {
+                if (!p.trim().isEmpty()) selected.add(p.trim());
+            }
+        }
+        // 刷新列表的勾选状态
+        if (adapter != null) {
+            adapter.filter(etSearch.getText() != null ? etSearch.getText().toString() : "");
+        }
     }
 
     private void loadAppsAsync() {
@@ -109,13 +152,14 @@ public class WhitelistActivity extends AppCompatActivity {
 
             final List<AppItem> items = new ArrayList<>();
             for (ApplicationInfo ai : list) {
-                if (ai.packageName.equals(selfPkg)) continue;
                 AppItem it = new AppItem();
                 it.pkg = ai.packageName;
                 it.label = ai.loadLabel(pm).toString();
                 it.isSystem = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
                 items.add(it);
             }
+
+            // 初始按 系统优先 + 字母排序
             Collections.sort(items, new Comparator<AppItem>() {
                 @Override
                 public int compare(AppItem a, AppItem b) {
@@ -151,17 +195,42 @@ public class WhitelistActivity extends AppCompatActivity {
 
         void filter(String q) {
             shown.clear();
-            if (q.isEmpty()) {
-                shown.addAll(allApps);
-            } else {
-                String lower = q.toLowerCase();
-                for (AppItem a : allApps) {
+            String lower = q == null ? "" : q.toLowerCase();
+
+            for (AppItem a : allApps) {
+                // ★ 1. 先按系统/用户类型过滤
+                if (currentFilterMode == 1 && a.isSystem) continue;
+                if (currentFilterMode == 2 && !a.isSystem) continue;
+
+                // ★ 2. 再按搜索词过滤
+                if (lower.isEmpty()) {
+                    shown.add(a);
+                } else {
                     if (a.label.toLowerCase().contains(lower)
                             || a.pkg.toLowerCase().contains(lower)) {
                         shown.add(a);
                     }
                 }
             }
+
+            // ★ 核心排序：已选中的置顶 -> 系统应用置顶 -> 字母排序
+            Collections.sort(shown, new Comparator<AppItem>() {
+                @Override
+                public int compare(AppItem a, AppItem b) {
+                    boolean aSel = selected.contains(a.pkg);
+                    boolean bSel = selected.contains(b.pkg);
+
+                    // 1. 是否已勾选
+                    if (aSel != bSel) return aSel ? -1 : 1;
+
+                    // 2. 是否系统应用
+                    if (a.isSystem != b.isSystem) return a.isSystem ? -1 : 1;
+
+                    // 3. 字母顺序
+                    return a.label.compareToIgnoreCase(b.label);
+                }
+            });
+
             tvEmpty.setVisibility(shown.isEmpty() && !allApps.isEmpty()
                     ? View.VISIBLE : View.GONE);
             notifyDataSetChanged();
@@ -178,17 +247,23 @@ public class WhitelistActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             AppItem item = shown.get(position);
-            final String pkg = item.pkg;   // ← final 捕获，稳定
+            final String pkg = item.pkg;
 
             h.tvName.setText(item.label);
             h.tvPkg.setText(item.pkg);
+
+            // 先清掉旧监听，避免 RecyclerView 复用时错乱
+            h.cb.setOnCheckedChangeListener(null);
             h.cb.setChecked(selected.contains(pkg));
 
-            // ★ 关键：在 Java 里显式禁用 checkbox 的点击和焦点
-            //   这样它的所有触摸都会冒泡到父级 row
-            h.cb.setClickable(false);
+            // 不再禁用 cb 的点击，让 row 和 cb 都能触发切换
+            h.cb.setClickable(true);
             h.cb.setFocusable(false);
             h.cb.setFocusableInTouchMode(false);
+
+            // 显式打开触感反馈（部分 ROM 默认可能被关掉）
+            h.row.setHapticFeedbackEnabled(true);
+            h.cb.setHapticFeedbackEnabled(true);
 
             h.ivIcon.setImageDrawable(defaultIcon);
             h.ivIcon.setTag(pkg);
@@ -199,13 +274,19 @@ public class WhitelistActivity extends AppCompatActivity {
                 loadIcon(pkg, h.ivIcon);
             }
 
-            // 点击绑定在 row 上，切换 selected + 更新 checkbox
-            h.row.setOnClickListener(v -> {
+            // 统一的切换逻辑：row 和 cb 都调它
+            View.OnClickListener toggle = v -> {
+                android.util.Log.d("VibBlocker", "whitelist toggle, pkg=" + pkg);
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
                 boolean now = !selected.contains(pkg);
                 if (now) selected.add(pkg);
                 else     selected.remove(pkg);
                 h.cb.setChecked(now);
-            });
+                // 不立刻 filter()，避免列表跳动导致点错
+            };
+
+            h.row.setOnClickListener(toggle);
+            h.cb.setOnClickListener(toggle);
         }
 
         @Override
