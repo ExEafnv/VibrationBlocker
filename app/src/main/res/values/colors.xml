@@ -2,4 +2,8 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="bg_gradient_start">#E6DFF5</color>
+    <color name="bg_gradient_end">#F8F6FD</color>
+    <color name="card_bg">#F8F6FC</color>
+    <color name="card_stroke">#E8E2F3</color>
 </resources>

@@ -1,13 +1,20 @@
 package com.eafnv.vibrationblocker;
 
 import android.app.AlertDialog;
-import android.app.TimePickerDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.RadioButton;
@@ -20,6 +27,7 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 import com.topjohnwu.superuser.Shell;
 
 import java.util.Calendar;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -34,7 +42,7 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences prefs;
 
     // UI 控件
-    private TextView tvStart, tvEnd, tvStatus, tvWhitelistSummary, tvModuleStatus;
+    private TextView tvStatus, tvWhitelistSummary, tvScheduleSummary, tvModuleStatus;
     private MaterialSwitch switchManual;
     private RadioGroup rgManual;
     private RadioButton rbBlockAll, rbUnblockAll;
@@ -43,8 +51,23 @@ public class MainActivity extends AppCompatActivity {
     private View statusDotModule;
 
     // 状态
-    private boolean rootReady = false;    // root 是否就绪
-    private boolean moduleActive = false; // LSPosed 模块是否已激活
+    private boolean rootReady = false;
+    private boolean moduleActive = false;
+
+    // ============================================================
+    // 震动测试逻辑
+    // ============================================================
+
+    private static final long START_INTERVAL_MS = 1100L;   // 1. 起步间隔
+    private static final long ACCEL_TOTAL_TIME_MS = 10000L; // 2. 加速总时长
+    private static final long SPRINT_THRESHOLD_MS = 80L;   // 3. 衔接门槛
+    private static final long SPRINT_TIME_MS = 3000L;      // 4. 衔接段长度
+    private static final long FINAL_INTERVAL_MS = 40L;     // 5. 最终震动间隔
+    private static final long VIBRATE_DURATION_MS = 15L;   // 6. 单次震动时长
+
+    private Handler hapticHandler;
+    private Vibrator mVibrator;
+    private long hapticStartTime = 0L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,12 +75,12 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        hapticHandler = new Handler(Looper.getMainLooper());
 
         // 绑定控件
-        tvStart            = findViewById(R.id.tv_start_time);
-        tvEnd              = findViewById(R.id.tv_end_time);
         tvStatus           = findViewById(R.id.tv_status);
         tvWhitelistSummary = findViewById(R.id.tv_whitelist_summary);
+        tvScheduleSummary  = findViewById(R.id.tv_schedule_summary);
         tvModuleStatus     = findViewById(R.id.tv_module_status);
         statusDot          = findViewById(R.id.status_dot);
         statusDotModule    = findViewById(R.id.status_dot_module);
@@ -77,14 +100,20 @@ public class MainActivity extends AppCompatActivity {
             }
             runOnUiThread(this::onRootReady);
         });
+
+        // 界面淡入动画
+        View rootView = findViewById(android.R.id.content);
+        rootView.setAlpha(0f);
+        rootView.animate().alpha(1f).setDuration(300).start();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // 从白名单页返回时刷新摘要与配置
+        // 从白名单页 / 时段页返回时刷新摘要与配置
         if (rootReady) {
             updateWhitelistSummary();
+            updateScheduleSummary();
             ConfigWriter.write(prefs);
             checkModuleActive();
         }
@@ -106,12 +135,13 @@ public class MainActivity extends AppCompatActivity {
         else          rbUnblockAll.setChecked(true);
 
         applyUiState(manual);
-        updateTimeDisplay();
         updateWhitelistSummary();
+        updateScheduleSummary();
         updateStatus();
 
         // 手动模式开关
         switchManual.setOnCheckedChangeListener((btn, isChecked) -> {
+            btn.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
             prefs.edit().putBoolean("manual_mode", isChecked).apply();
             applyUiState(isChecked);
             ConfigWriter.write(prefs);
@@ -126,15 +156,19 @@ public class MainActivity extends AppCompatActivity {
             updateStatus();
         });
 
-        // 时间行点击
-        findViewById(R.id.row_start_time).setOnClickListener(v -> pickTime(true));
-        findViewById(R.id.row_end_time).setOnClickListener(v -> pickTime(false));
+        // 时段设置入口
+        findViewById(R.id.row_schedule).setOnClickListener(v ->
+                startActivity(new Intent(this, ScheduleActivity.class)));
 
         // 白名单入口
         findViewById(R.id.row_whitelist).setOnClickListener(v ->
                 startActivity(new Intent(this, WhitelistActivity.class)));
 
-        // 首次写入配置 + 检测激活状态
+        // 震动测试入口
+        findViewById(R.id.row_vibration_test).setOnClickListener(v ->
+                showVibrationTestDialog());
+
+        // 首次写入配置，检测激活状态
         ConfigWriter.write(prefs);
         checkModuleActive();
     }
@@ -143,7 +177,6 @@ public class MainActivity extends AppCompatActivity {
     // 模块激活检测
     // ============================================================
 
-    /** 模块进程被 LSPosed 注入时，ModuleActive.isActive() 会被 hook 成 true */
     private void checkModuleActive() {
         boolean active = false;
         try {
@@ -186,27 +219,21 @@ public class MainActivity extends AppCompatActivity {
         if (manual) {
             blocked = blockAll;
         } else {
-            int sh = prefs.getInt("start_hour", 22);
-            int sm = prefs.getInt("start_min", 0);
-            int eh = prefs.getInt("end_hour", 7);
-            int em = prefs.getInt("end_min", 0);
-            int startMin = sh * 60 + sm;
-            int endMin   = eh * 60 + em;
-
+            blocked = false;
+            List<Schedule> schedules = ScheduleStore.load(prefs);
             Calendar cal = Calendar.getInstance();
+            int curDay = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7;
             int now = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
-
-            if (startMin == endMin) {
-                blocked = false;
-            } else if (startMin < endMin) {
-                blocked = now >= startMin && now < endMin;
-            } else {
-                blocked = now >= startMin || now < endMin;
+            for (Schedule sc : schedules) {
+                if (ScheduleJudge.hit(sc, curDay, now)) {
+                    blocked = true;
+                    break;
+                }
             }
         }
 
         if (blocked) {
-            tvStatus.setText("正在屏蔽所有振动");
+            tvStatus.setText("正在屏蔽振动");
             statusDot.setBackgroundResource(R.drawable.status_dot_on);
         } else {
             tvStatus.setText("未在屏蔽时段");
@@ -225,13 +252,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void updateTimeDisplay() {
-        int sh = prefs.getInt("start_hour", 22);
-        int sm = prefs.getInt("start_min", 0);
-        int eh = prefs.getInt("end_hour", 7);
-        int em = prefs.getInt("end_min", 0);
-        tvStart.setText(String.format("%02d:%02d", sh, sm));
-        tvEnd.setText(String.format("%02d:%02d", eh, em));
+    private void updateScheduleSummary() {
+        List<Schedule> list = ScheduleStore.load(prefs);
+        if (list.isEmpty()) {
+            tvScheduleSummary.setText("未设置");
+        } else {
+            tvScheduleSummary.setText("已设置 " + list.size() + " 个时段");
+        }
     }
 
     // ============================================================
@@ -255,19 +282,128 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void pickTime(boolean isStart) {
-        int h = prefs.getInt(isStart ? "start_hour" : "end_hour", isStart ? 22 : 7);
-        int m = prefs.getInt(isStart ? "start_min"  : "end_min",  0);
+    // ============================================================
+    // 震动测试
+    // ============================================================
 
-        new TimePickerDialog(this, (view, hourOfDay, minute) -> {
-            SharedPreferences.Editor editor = prefs.edit();
-            editor.putInt(isStart ? "start_hour" : "end_hour", hourOfDay);
-            editor.putInt(isStart ? "start_min"  : "end_min",  minute);
-            editor.commit();
-            updateTimeDisplay();
-            ConfigWriter.write(prefs);
-            updateStatus();
-        }, h, m, true).show();
+    private void showVibrationTestDialog() {
+        View content = getLayoutInflater().inflate(R.layout.dialog_vibration_test, null);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(content)
+                .setCancelable(true)
+                .create();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog);
+        }
+
+        View btn = content.findViewById(R.id.btn_vibrate);
+        btn.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    startRepeatingHaptic();
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    stopRepeatingHaptic();
+                    return true;
+            }
+            return false;
+        });
+
+        dialog.setOnDismissListener(d -> stopRepeatingHaptic());
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.86f);
+            dialog.getWindow().setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    // ============================================================
+    // 震动测试逻辑
+    // ============================================================
+
+    private void startRepeatingHaptic() {
+        stopRepeatingHaptic();
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                VibratorManager vm = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                mVibrator = vm.getDefaultVibrator();
+            } else {
+                mVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            }
+        } catch (Throwable ignored) {}
+
+        if (mVibrator == null || !mVibrator.hasVibrator()) return;
+
+        // 记录按下瞬间的时间戳
+        hapticStartTime = System.currentTimeMillis();
+        doShortVibrate();
+        hapticHandler.postDelayed(hapticRunnable, START_INTERVAL_MS);
+    }
+
+    private void stopRepeatingHaptic() {
+        if (hapticHandler != null) {
+            hapticHandler.removeCallbacks(hapticRunnable);
+        }
+        if (mVibrator != null) {
+            try {
+                mVibrator.cancel();
+            } catch (Throwable ignored) {}
+        }
+        hapticStartTime = 0L;
+    }
+
+    private final Runnable hapticRunnable = new Runnable() {
+        @Override
+        public void run() {
+            // 计算从按下到现在流逝了多少时间
+            long elapsed = System.currentTimeMillis() - hapticStartTime;
+
+            if (elapsed < ACCEL_TOTAL_TIME_MS) {
+                // 使用指数曲线计算进度
+                double progress = (double) elapsed / ACCEL_TOTAL_TIME_MS;
+                long currentInterval = (long) (START_INTERVAL_MS * Math.pow((double) SPRINT_THRESHOLD_MS / START_INTERVAL_MS, progress));
+
+                doShortVibrate();
+                hapticHandler.postDelayed(this, currentInterval);
+
+            } else if (elapsed < ACCEL_TOTAL_TIME_MS + SPRINT_TIME_MS) {
+                // 从 门槛 压到 最终的极限间隔
+                double progress = (double) (elapsed - ACCEL_TOTAL_TIME_MS) / SPRINT_TIME_MS;
+                long currentInterval = (long) (SPRINT_THRESHOLD_MS * Math.pow((double) FINAL_INTERVAL_MS / SPRINT_THRESHOLD_MS, progress));
+
+                doShortVibrate();
+                hapticHandler.postDelayed(this, currentInterval);
+
+            } else {
+                // 长震
+                startSustainVibrate();
+            }
+        }
+    };
+
+    private void doShortVibrate() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mVibrator.vibrate(VibrationEffect.createOneShot(VIBRATE_DURATION_MS, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                mVibrator.vibrate(VIBRATE_DURATION_MS);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void startSustainVibrate() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mVibrator.vibrate(VibrationEffect.createOneShot(60000, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                mVibrator.vibrate(60000);
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ============================================================
@@ -299,7 +435,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** 彻底退出 */
+    // 彻底退出
     private void exitApp() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {

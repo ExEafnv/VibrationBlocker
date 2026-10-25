@@ -14,17 +14,17 @@ android {
         applicationId "com.eafnv.vibrationblocker"
         minSdk 26
         targetSdk 36
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
     }
 
     buildTypes {
         release {
-            // AGP 9.0 新语法：开启 R8 混淆压缩
+            // 开启 R8 混淆压缩
             optimization {
                 enable true
             }
-            // 兼容部分 AGP 版本的传统写法（若新语法报错就保留这两行）
+            // 兼容部分 AGP 版本
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

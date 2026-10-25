@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_gradient_start">#26242C</color>
+    <color name="bg_gradient_end">#141317</color>
+    <color name="card_bg">#2E2C34</color>
+    <color name="card_stroke">#3A3742</color>
+</resources>

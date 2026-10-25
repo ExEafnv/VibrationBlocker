@@ -72,8 +72,24 @@ public class HookEntry implements IXposedHookLoadPackage {
         protected void beforeHookedMethod(MethodHookParam param) {
             try {
                 String opPkg = extractOpPkg(param);
-                if (opPkg != null && ConfigReader.shouldBlock(opPkg)) {
-                    param.setResult(null);
+                if (opPkg != null) {
+                    // 提取 usage
+                    int usage = 0; // 默认未知
+                    for (Object arg : param.args) {
+                        if (arg != null && arg.getClass().getName().contains("VibrationAttributes")) {
+                            try {
+                                usage = (int) XposedHelpers.callMethod(arg, "getUsage");
+                            } catch (Throwable ignored) {}
+                            break;
+                        }
+                    }
+
+                    // 记录
+                    VibRecorder.onVibration(opPkg, usage);
+
+                    if (ConfigReader.shouldBlock(opPkg)) {
+                        param.setResult(null);
+                    }
                 }
             } catch (Throwable t) {
                 XposedBridge.log(TAG + ": block error " + t);
